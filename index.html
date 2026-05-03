@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Volunteer Data Viewer</title>
+  <style>
+    :root {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      line-height: 1.4;
+      color: #111;
+    }
+    body { margin: 0; padding: 20px; background: #f7f7f7; }
+    .card {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #e6e6e6;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 1px 8px rgba(0,0,0,.05);
+    }
+    h1 { margin: 0 0 18px; font-size: 20px; font-weight: 700; }
+    label {
+      display: block;
+      margin: 0 0 6px;
+      font-size: 13px;
+      font-weight: 650;
+      color: #333;
+    }
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 11px 12px;
+      font-size: 14px;
+      border-radius: 12px;
+      border: 1px solid #d7d7d7;
+      background: #fff;
+      outline: none;
+      margin-bottom: 12px;
+    }
+    select:focus { border-color: #b9b9b9; box-shadow: 0 0 0 3px rgba(0,0,0,.06); }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 20px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #111;
+      color: #fff;
+      margin-top: 4px;
+    }
+    button[disabled] { opacity: .5; cursor: not-allowed; }
+    .msg {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      display: none;
+    }
+    .msg.err  { background: #fff5f5; border: 1px solid #f2c9c9; color: #7a0000; }
+    .msg.info { background: #f5f8ff; border: 1px solid #c9d8f2; color: #00237a; }
+    .results  { margin-top: 18px; overflow-x: auto; }
+    .results h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0 0 10px;
+      color: #333;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #f2f2f2;
+      border-bottom: 2px solid #e0e0e0;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #ebebeb;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafafa; }
+    .num { text-align: right; }
+    tfoot td {
+      font-weight: 700;
+      background: #f7f7f7;
+      border-top: 2px solid #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Volunteer Data Viewer</h1>
+
+  <label for="querySelect">Report</label>
+  <select id="querySelect">
+    <option value="mh_summary">Missionary Hours — Monthly Totals by Type</option>
+    <option value="mh_detail">Missionary Hours — Detail by Person</option>
+    <option value="orchard_stake">Orchard Volunteer Hours by Stake</option>
+    <option value="leadership">Leadership Summary — All Groups</option>
+    <option value="mh_entries">All Missionary Entries for Month</option>
+  </select>
+
+  <label for="monthSelect">Month</label>
+  <select id="monthSelect"></select>
+
+  <button id="runBtn">Run</button>
+
+  <div id="msg" class="msg"></div>
+  <div id="results" class="results"></div>
+</div>
+
+<script>
+  const SUPABASE_URL      = "https://tfkdkekvtuqepjqsgjoc.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_JRFxF6A8mDcZX2D05CdoCQ_F6_rDbwh";
+  const HDR = {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY
+  };
+
+  // ── Month dropdown ────────────────────────────────────────
+  const MONTH_NAMES = ["January","February","March","April","May","June",
+                       "July","August","September","October","November","December"];
+  (function buildMonths(){
+    const sel = document.getElementById("monthSelect");
+    const now = new Date();
+    const cur = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+    for (let delta = -6; delta <= 3; delta++){
+      const d  = new Date(now.getFullYear(), now.getMonth() + delta, 1);
+      const v  = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+      const o  = document.createElement("option");
+      o.value  = v;
+      o.textContent = MONTH_NAMES[d.getMonth()] + " " + d.getFullYear();
+      if (v === cur) o.selected = true;
+      sel.appendChild(o);
+    }
+  })();
+
+  function monthLabel(yyyyMM){
+    const [y,m] = yyyyMM.split("-");
+    return MONTH_NAMES[parseInt(m,10)-1] + " " + y;
+  }
+  function monthRange(yyyyMM){
+    const [y,m] = yyyyMM.split("-").map(Number);
+    const start = yyyyMM + "-01";
+    const end   = m === 12
+      ? (y+1) + "-01-01"
+      : y + "-" + String(m+1).padStart(2,"0") + "-01";
+    return { start, end };
+  }
+
+  // ── Supabase fetch helper ─────────────────────────────────
+  async function sbGet(path){
+    const res = await fetch(SUPABASE_URL + path, { headers: HDR });
+    if (!res.ok) throw new Error("HTTP " + res.status + " — " + await res.text());
+    return res.json();
+  }
+
+  // ── Message / table helpers ───────────────────────────────
+  function showMsg(kind, text){
+    const el = document.getElementById("msg");
+    el.className     = "msg " + kind;
+    el.textContent   = text;
+    el.style.display = "block";
+  }
+  function clearMsg(){ document.getElementById("msg").style.display = "none"; }
+
+  function renderTable(container, title, columns, rows, footerRow){
+    if (!rows.length){ container.innerHTML = "<p style='color:#666;font-size:13px'>No data found for this month.</p>"; return; }
+    let html = "<h2>" + title + "</h2><table><thead><tr>";
+    columns.forEach(c => { html += "<th" + (c.num ? " class='num'" : "") + ">" + c.label + "</th>"; });
+    html += "</tr></thead><tbody>";
+    rows.forEach(r => {
+      html += "<tr>";
+      columns.forEach(c => {
+        const v = r[c.key] ?? "";
+        html += "<td" + (c.num ? " class='num'" : "") + ">" + (c.fmt ? c.fmt(v) : v) + "</td>";
+      });
+      html += "</tr>";
+    });
+    html += "</tbody>";
+    if (footerRow){
+      html += "<tfoot><tr>";
+      columns.forEach(c => {
+        const v = footerRow[c.key] ?? "";
+        html += "<td" + (c.num ? " class='num'" : "") + ">" + (c.fmt ? c.fmt(v) : v) + "</td>";
+      });
+      html += "</tr></tfoot>";
+    }
+    html += "</table>";
+    container.innerHTML = html;
+  }
+
+  function fmtHours(v){ return parseFloat(v||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2}); }
+
+  // ── Queries ───────────────────────────────────────────────
+  async function runMhSummary(month, container){
+    const rows = await sbGet("/rest/v1/missionary_hours_by_month?month_date=eq." + month + "-01&order=type.asc");
+    const cols = [
+      { key:"type",        label:"Type" },
+      { key:"total_hours", label:"Total Hours", num:true, fmt:fmtHours },
+      { key:"entry_count", label:"Entries",     num:true }
+    ];
+    const total = rows.reduce((s,r) => s + parseFloat(r.total_hours||0), 0);
+    const footer = { type:"Total", total_hours:total, entry_count: rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
+    renderTable(container, "Missionary Hours — " + monthLabel(month), cols, rows, footer);
+  }
+
+  async function runMhDetail(month, container){
+    const rows = await sbGet("/rest/v1/missionary_hours_detail?month_date=eq." + month + "-01&order=type.asc,name.asc");
+    const cols = [
+      { key:"type",        label:"Type" },
+      { key:"name",        label:"Name" },
+      { key:"stake",       label:"Stake" },
+      { key:"total_hours", label:"Hours",   num:true, fmt:fmtHours },
+      { key:"entry_count", label:"Entries", num:true }
+    ];
+    const footer = { type:"Total", name:"", stake:"", total_hours: rows.reduce((s,r)=>s+parseFloat(r.total_hours||0),0), entry_count: rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
+    renderTable(container, "Missionary Hours by Person — " + monthLabel(month), cols, rows, footer);
+  }
+
+  async function runOrchardStake(month, container){
+    const { start, end } = monthRange(month);
+    const rows = await sbGet('/rest/v1/hours_ledger?serviceDate=gte.' + start + '&serviceDate=lt.' + end + '&select=stake,totalHours');
+    // Group by stake in JS
+    const map = {};
+    rows.forEach(r => { map[r.stake] = (map[r.stake]||0) + parseFloat(r.totalHours||0); });
+    const grouped = Object.entries(map)
+      .map(([stake, hours]) => ({ stake, hours }))
+      .sort((a,b) => a.stake.localeCompare(b.stake));
+    const cols = [
+      { key:"stake", label:"Stake" },
+      { key:"hours", label:"Total Hours", num:true, fmt:fmtHours }
+    ];
+    const footer = { stake:"Total", hours: grouped.reduce((s,r)=>s+r.hours,0) };
+    renderTable(container, "Orchard Volunteer Hours by Stake — " + monthLabel(month), cols, grouped, footer);
+  }
+
+  async function runLeadership(month, container){
+    const { start, end } = monthRange(month);
+    const [mhRows, orchardRows] = await Promise.all([
+      sbGet("/rest/v1/missionary_hours_by_month?month_date=eq." + month + "-01"),
+      sbGet('/rest/v1/hours_ledger?serviceDate=gte.' + start + '&serviceDate=lt.' + end + '&select=totalHours')
+    ]);
+    const svc    = mhRows.find(r => r.type === "Service");
+    const young  = mhRows.find(r => r.type === "Full-time");
+    const orchard = orchardRows.reduce((s,r) => s + parseFloat(r.totalHours||0), 0);
+    const svcHrs   = parseFloat(svc?.total_hours   || 0);
+    const youngHrs = parseFloat(young?.total_hours || 0);
+    const rows = [
+      { group:"Service Missionaries", hours: svcHrs },
+      { group:"Full-Time Missionaries", hours: youngHrs },
+      { group:"Stake Volunteers",      hours: orchard }
+    ];
+    const cols = [
+      { key:"group", label:"Group" },
+      { key:"hours", label:"Total Hours", num:true, fmt:fmtHours }
+    ];
+    const footer = { group:"Grand Total", hours: svcHrs + youngHrs + orchard };
+    renderTable(container, "Leadership Summary — " + monthLabel(month), cols, rows, footer);
+  }
+
+  async function runMhEntries(month, container){
+    const rows = await sbGet(
+      "/rest/v1/missionary_hours" +
+      "?select=submitted_on,hours,source,volunteers(full_name,missionary_type)" +
+      "&month=eq." + month + "-01" +
+      "&order=submitted_on.asc"
+    );
+    // Flatten the nested volunteer object
+    const flat = rows.map(r => ({
+      submitted_on:    r.submitted_on,
+      name:            r.volunteers?.full_name        || "",
+      type:            r.volunteers?.missionary_type  || "",
+      hours:           r.hours,
+      source:          r.source || ""
+    }));
+    const cols = [
+      { key:"submitted_on", label:"Date" },
+      { key:"name",         label:"Name" },
+      { key:"type",         label:"Type" },
+      { key:"hours",        label:"Hours", num:true, fmt:fmtHours },
+      { key:"source",       label:"Source" }
+    ];
+    const footer = { submitted_on:"Total", name:"", type:"", hours: flat.reduce((s,r)=>s+parseFloat(r.hours||0),0), source:"" };
+    renderTable(container, "All Missionary Entries — " + monthLabel(month), cols, flat, footer);
+  }
+
+  // ── Run button ────────────────────────────────────────────
+  document.getElementById("runBtn").addEventListener("click", async () => {
+    clearMsg();
+    const query    = document.getElementById("querySelect").value;
+    const month    = document.getElementById("monthSelect").value;
+    const btn      = document.getElementById("runBtn");
+    const container = document.getElementById("results");
+
+    btn.disabled    = true;
+    btn.textContent = "Loading…";
+    container.innerHTML = "";
+
+    try {
+      if      (query === "mh_summary")   await runMhSummary(month, container);
+      else if (query === "mh_detail")    await runMhDetail(month, container);
+      else if (query === "orchard_stake")await runOrchardStake(month, container);
+      else if (query === "leadership")   await runLeadership(month, container);
+      else if (query === "mh_entries")   await runMhEntries(month, container);
+    } catch(err) {
+      showMsg("err", "Error loading data: " + (err?.message || String(err)));
+    } finally {
+      btn.disabled    = false;
+      btn.textContent = "Run";
+    }
+  });
+</script>
+</body>
+</html>
