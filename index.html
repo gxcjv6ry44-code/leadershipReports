@@ -28,7 +28,7 @@
       font-weight: 650;
       color: #333;
     }
-    select {
+    select, input[type=password] {
       width: 100%;
       box-sizing: border-box;
       padding: 11px 12px;
@@ -39,7 +39,7 @@
       outline: none;
       margin-bottom: 12px;
     }
-    select:focus { border-color: #b9b9b9; box-shadow: 0 0 0 3px rgba(0,0,0,.06); }
+    select:focus, input[type=password]:focus { border-color: #b9b9b9; box-shadow: 0 0 0 3px rgba(0,0,0,.06); }
     button {
       appearance: none;
       border: 0;
@@ -94,31 +94,80 @@
       background: #f7f7f7;
       border-top: 2px solid #e0e0e0;
     }
+    /* ── Password screen ── */
+    #loginCard {
+      max-width: 360px;
+      margin: 60px auto 0;
+    }
+    #loginCard h1 { margin-bottom: 6px; }
+    #loginCard p  { margin: 0 0 18px; font-size: 13px; color: #555; }
+    .err-text { color: #8b0000; font-size: 13px; margin-top: 6px; display: none; }
   </style>
 </head>
 <body>
-<div class="card">
-  <h1>Volunteer Data Viewer</h1>
 
-  <label for="querySelect">Report</label>
-  <select id="querySelect">
-    <option value="mh_summary">Missionary Hours — Monthly Totals by Type</option>
-    <option value="mh_detail">Missionary Hours — Detail by Person</option>
-    <option value="orchard_stake">Orchard Volunteer Hours by Stake</option>
-    <option value="leadership">Leadership Summary — All Groups</option>
-    <option value="mh_entries">All Missionary Entries for Month</option>
-  </select>
+  <!-- Password screen -->
+  <div id="loginCard" class="card">
+    <h1>Volunteer Data Viewer</h1>
+    <p>Enter the password to continue.</p>
+    <label for="pwInput">Password</label>
+    <input id="pwInput" type="password" placeholder="Password" />
+    <button id="pwBtn">Continue</button>
+    <div id="pwErr" class="err-text">Incorrect password — please try again.</div>
+  </div>
 
-  <label for="monthSelect">Month</label>
-  <select id="monthSelect"></select>
+  <!-- Main content (hidden until authenticated) -->
+  <div id="mainCard" class="card" style="display:none">
+    <h1>Volunteer Data Viewer</h1>
 
-  <button id="runBtn">Run</button>
+    <label for="querySelect">Report</label>
+    <select id="querySelect">
+      <option value="mh_summary">Missionary Hours — Monthly Totals by Type</option>
+      <option value="mh_detail">Missionary Hours — Detail by Person</option>
+      <option value="orchard_stake">Orchard Volunteer Hours by Stake</option>
+      <option value="leadership">Leadership Summary — All Groups</option>
+      <option value="mh_entries">All Missionary Entries for Month</option>
+    </select>
 
-  <div id="msg" class="msg"></div>
-  <div id="results" class="results"></div>
-</div>
+    <label for="monthSelect">Month</label>
+    <select id="monthSelect"></select>
+
+    <button id="runBtn">Run</button>
+
+    <div id="msg" class="msg"></div>
+    <div id="results" class="results"></div>
+  </div>
 
 <script>
+  // ── Password gate ─────────────────────────────────────────
+  const PASSWORD = "z10n";
+
+  function unlock(){
+    document.getElementById("loginCard").style.display = "none";
+    document.getElementById("mainCard").style.display  = "block";
+    sessionStorage.setItem("vdv_auth", "1");
+  }
+
+  // Stay unlocked for the session (no re-entry on refresh)
+  if (sessionStorage.getItem("vdv_auth") === "1") unlock();
+
+  document.getElementById("pwBtn").addEventListener("click", checkPassword);
+  document.getElementById("pwInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") checkPassword();
+  });
+
+  function checkPassword(){
+    const val = document.getElementById("pwInput").value;
+    if (val === PASSWORD){
+      unlock();
+    } else {
+      document.getElementById("pwErr").style.display = "block";
+      document.getElementById("pwInput").value = "";
+      document.getElementById("pwInput").focus();
+    }
+  }
+
+  // ── Supabase ──────────────────────────────────────────────
   const SUPABASE_URL      = "https://tfkdkekvtuqepjqsgjoc.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_JRFxF6A8mDcZX2D05CdoCQ_F6_rDbwh";
   const HDR = {
@@ -157,18 +206,16 @@
     return { start, end };
   }
 
-  // ── Supabase fetch helper ─────────────────────────────────
   async function sbGet(path){
     const res = await fetch(SUPABASE_URL + path, { headers: HDR });
     if (!res.ok) throw new Error("HTTP " + res.status + " — " + await res.text());
     return res.json();
   }
 
-  // ── Message / table helpers ───────────────────────────────
   function showMsg(kind, text){
     const el = document.getElementById("msg");
-    el.className     = "msg " + kind;
-    el.textContent   = text;
+    el.className = "msg " + kind;
+    el.textContent = text;
     el.style.display = "block";
   }
   function clearMsg(){ document.getElementById("msg").style.display = "none"; }
@@ -201,7 +248,6 @@
 
   function fmtHours(v){ return parseFloat(v||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2}); }
 
-  // ── Queries ───────────────────────────────────────────────
   async function runMhSummary(month, container){
     const rows = await sbGet("/rest/v1/missionary_hours_by_month?month_date=eq." + month + "-01&order=type.asc");
     const cols = [
@@ -209,8 +255,7 @@
       { key:"total_hours", label:"Total Hours", num:true, fmt:fmtHours },
       { key:"entry_count", label:"Entries",     num:true }
     ];
-    const total = rows.reduce((s,r) => s + parseFloat(r.total_hours||0), 0);
-    const footer = { type:"Total", total_hours:total, entry_count: rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
+    const footer = { type:"Total", total_hours:rows.reduce((s,r)=>s+parseFloat(r.total_hours||0),0), entry_count:rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
     renderTable(container, "Missionary Hours — " + monthLabel(month), cols, rows, footer);
   }
 
@@ -223,24 +268,21 @@
       { key:"total_hours", label:"Hours",   num:true, fmt:fmtHours },
       { key:"entry_count", label:"Entries", num:true }
     ];
-    const footer = { type:"Total", name:"", stake:"", total_hours: rows.reduce((s,r)=>s+parseFloat(r.total_hours||0),0), entry_count: rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
+    const footer = { type:"Total", name:"", stake:"", total_hours:rows.reduce((s,r)=>s+parseFloat(r.total_hours||0),0), entry_count:rows.reduce((s,r)=>s+parseInt(r.entry_count||0),0) };
     renderTable(container, "Missionary Hours by Person — " + monthLabel(month), cols, rows, footer);
   }
 
   async function runOrchardStake(month, container){
     const { start, end } = monthRange(month);
     const rows = await sbGet('/rest/v1/hours_ledger?serviceDate=gte.' + start + '&serviceDate=lt.' + end + '&select=stake,totalHours');
-    // Group by stake in JS
     const map = {};
     rows.forEach(r => { map[r.stake] = (map[r.stake]||0) + parseFloat(r.totalHours||0); });
-    const grouped = Object.entries(map)
-      .map(([stake, hours]) => ({ stake, hours }))
-      .sort((a,b) => a.stake.localeCompare(b.stake));
+    const grouped = Object.entries(map).map(([stake,hours])=>({stake,hours})).sort((a,b)=>a.stake.localeCompare(b.stake));
     const cols = [
       { key:"stake", label:"Stake" },
       { key:"hours", label:"Total Hours", num:true, fmt:fmtHours }
     ];
-    const footer = { stake:"Total", hours: grouped.reduce((s,r)=>s+r.hours,0) };
+    const footer = { stake:"Total", hours:grouped.reduce((s,r)=>s+r.hours,0) };
     renderTable(container, "Orchard Volunteer Hours by Stake — " + monthLabel(month), cols, grouped, footer);
   }
 
@@ -250,38 +292,35 @@
       sbGet("/rest/v1/missionary_hours_by_month?month_date=eq." + month + "-01"),
       sbGet('/rest/v1/hours_ledger?serviceDate=gte.' + start + '&serviceDate=lt.' + end + '&select=totalHours')
     ]);
-    const svc    = mhRows.find(r => r.type === "Service");
-    const young  = mhRows.find(r => r.type === "Full-time");
-    const orchard = orchardRows.reduce((s,r) => s + parseFloat(r.totalHours||0), 0);
-    const svcHrs   = parseFloat(svc?.total_hours   || 0);
-    const youngHrs = parseFloat(young?.total_hours || 0);
+    const svc     = mhRows.find(r => r.type === "Service");
+    const young   = mhRows.find(r => r.type === "Full-time");
+    const orchard = orchardRows.reduce((s,r)=>s+parseFloat(r.totalHours||0),0);
+    const svcHrs  = parseFloat(svc?.total_hours  || 0);
+    const youngHrs= parseFloat(young?.total_hours|| 0);
     const rows = [
-      { group:"Service Missionaries", hours: svcHrs },
+      { group:"Service Missionaries",   hours: svcHrs   },
       { group:"Full-Time Missionaries", hours: youngHrs },
-      { group:"Stake Volunteers",      hours: orchard }
+      { group:"Stake Volunteers",        hours: orchard  }
     ];
     const cols = [
       { key:"group", label:"Group" },
       { key:"hours", label:"Total Hours", num:true, fmt:fmtHours }
     ];
-    const footer = { group:"Grand Total", hours: svcHrs + youngHrs + orchard };
-    renderTable(container, "Leadership Summary — " + monthLabel(month), cols, rows, footer);
+    renderTable(container, "Leadership Summary — " + monthLabel(month), cols, rows, { group:"Grand Total", hours:svcHrs+youngHrs+orchard });
   }
 
   async function runMhEntries(month, container){
     const rows = await sbGet(
       "/rest/v1/missionary_hours" +
       "?select=submitted_on,hours,source,volunteers(full_name,missionary_type)" +
-      "&month=eq." + month + "-01" +
-      "&order=submitted_on.asc"
+      "&month=eq." + month + "-01&order=submitted_on.asc"
     );
-    // Flatten the nested volunteer object
     const flat = rows.map(r => ({
-      submitted_on:    r.submitted_on,
-      name:            r.volunteers?.full_name        || "",
-      type:            r.volunteers?.missionary_type  || "",
-      hours:           r.hours,
-      source:          r.source || ""
+      submitted_on: r.submitted_on,
+      name:         r.volunteers?.full_name       || "",
+      type:         r.volunteers?.missionary_type || "",
+      hours:        r.hours,
+      source:       r.source || ""
     }));
     const cols = [
       { key:"submitted_on", label:"Date" },
@@ -290,28 +329,25 @@
       { key:"hours",        label:"Hours", num:true, fmt:fmtHours },
       { key:"source",       label:"Source" }
     ];
-    const footer = { submitted_on:"Total", name:"", type:"", hours: flat.reduce((s,r)=>s+parseFloat(r.hours||0),0), source:"" };
+    const footer = { submitted_on:"Total", name:"", type:"", hours:flat.reduce((s,r)=>s+parseFloat(r.hours||0),0), source:"" };
     renderTable(container, "All Missionary Entries — " + monthLabel(month), cols, flat, footer);
   }
 
-  // ── Run button ────────────────────────────────────────────
   document.getElementById("runBtn").addEventListener("click", async () => {
     clearMsg();
-    const query    = document.getElementById("querySelect").value;
-    const month    = document.getElementById("monthSelect").value;
-    const btn      = document.getElementById("runBtn");
+    const query     = document.getElementById("querySelect").value;
+    const month     = document.getElementById("monthSelect").value;
+    const btn       = document.getElementById("runBtn");
     const container = document.getElementById("results");
-
     btn.disabled    = true;
     btn.textContent = "Loading…";
     container.innerHTML = "";
-
     try {
-      if      (query === "mh_summary")   await runMhSummary(month, container);
-      else if (query === "mh_detail")    await runMhDetail(month, container);
-      else if (query === "orchard_stake")await runOrchardStake(month, container);
-      else if (query === "leadership")   await runLeadership(month, container);
-      else if (query === "mh_entries")   await runMhEntries(month, container);
+      if      (query === "mh_summary")    await runMhSummary(month, container);
+      else if (query === "mh_detail")     await runMhDetail(month, container);
+      else if (query === "orchard_stake") await runOrchardStake(month, container);
+      else if (query === "leadership")    await runLeadership(month, container);
+      else if (query === "mh_entries")    await runMhEntries(month, container);
     } catch(err) {
       showMsg("err", "Error loading data: " + (err?.message || String(err)));
     } finally {
