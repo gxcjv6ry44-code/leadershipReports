@@ -127,6 +127,7 @@
       <option value="orchard_stake">Orchard Volunteer Hours by Stake</option>
       <option value="leadership">Leadership Summary — All Groups</option>
       <option value="mh_entries">All Missionary Entries for Month</option>
+      <option value="stake_detail">Stake Volunteer Detail — People, Hours per Person &amp; Total</option>
     </select>
 
     <label for="monthSelect">Month</label>
@@ -309,6 +310,37 @@
     renderTable(container, "Leadership Summary — " + monthLabel(month), cols, rows, { group:"Grand Total", hours:svcHrs+youngHrs+orchard });
   }
 
+  async function runStakeDetail(month, container){
+    const { start, end } = monthRange(month);
+    const rows = await sbGet(
+      '/rest/v1/checkins?select=count,service_date,stakes(name,hours_per_person)' +
+      '&service_date=gte.' + start + '&service_date=lt.' + end
+    );
+    // Aggregate by stake
+    const map = {};
+    rows.forEach(r => {
+      const stakeName = r.stakes?.name || "Unknown";
+      const hpp       = parseFloat(r.stakes?.hours_per_person || 0);
+      const cnt       = parseInt(r.count || 0, 10);
+      if (!map[stakeName]) map[stakeName] = { stake: stakeName, hours_per_person: hpp, total_people: 0, total_hours: 0 };
+      map[stakeName].total_people += cnt;
+      map[stakeName].total_hours  += cnt * hpp;
+    });
+    const grouped = Object.values(map).sort((a,b) => a.stake.localeCompare(b.stake));
+    const cols = [
+      { key:"stake",           label:"Stake" },
+      { key:"total_people",    label:"Total People",      num:true },
+      { key:"hours_per_person",label:"Hours / Person",    num:true, fmt:fmtHours },
+      { key:"total_hours",     label:"Total Hours",       num:true, fmt:fmtHours }
+    ];
+    const footer = {
+      stake:            "Total",
+      total_people:     grouped.reduce((s,r) => s + r.total_people, 0),
+      hours_per_person: "",
+      total_hours:      grouped.reduce((s,r) => s + r.total_hours, 0)
+    };
+    renderTable(container, "Stake Volunteer Detail — " + monthLabel(month), cols, grouped, footer);
+  }
   async function runMhEntries(month, container){
     const rows = await sbGet(
       "/rest/v1/missionary_hours" +
@@ -348,6 +380,7 @@
       else if (query === "orchard_stake") await runOrchardStake(month, container);
       else if (query === "leadership")    await runLeadership(month, container);
       else if (query === "mh_entries")    await runMhEntries(month, container);
+      else if (query === "stake_detail")  await runStakeDetail(month, container);
     } catch(err) {
       showMsg("err", "Error loading data: " + (err?.message || String(err)));
     } finally {
